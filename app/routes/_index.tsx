@@ -2,8 +2,9 @@ import React from "react";
 import { json, type MetaFunction, type ActionFunctionArgs, type LoaderFunctionArgs } from "@remix-run/node";
 import { useLoaderData, useNavigation } from "@remix-run/react";
 import { createClient } from "@supabase/supabase-js";
-import { Container, Row, Col, Card, Button, ListGroup, ProgressBar, Badge, Alert, Modal, Form as BootstrapForm } from "react-bootstrap";
+import { Container, Row, Col, Card, Button, ProgressBar, Alert, Modal, Form as BootstrapForm } from "react-bootstrap";
 import { CaffeineChart } from "~/components/CaffeineChart";
+import { LogList } from "~/components/LogList";
 
 export const meta: MetaFunction = () => {
   return [
@@ -34,6 +35,15 @@ const toLocalISOString = (date: Date) => {
   return localISOTime;
 };
 
+// --- Configuration ---
+const DRINK_PRESETS = [
+  { id: "espresso",   label: "Espresso",   caffeine: 80,  sugar: 0,  emoji: "☕", variant: "outline-dark" },
+  { id: "americano",  label: "Americano",  caffeine: 150, sugar: 0,  emoji: "☕", variant: "dark" },
+  { id: "latte",      label: "Latte",      caffeine: 120, sugar: 10, emoji: "🥛", variant: "primary" },
+  { id: "lemon_tea",  label: "Lemon Tea",  caffeine: 15,  sugar: 20, emoji: "🍋", variant: "warning" },
+  { id: "coke_zero",  label: "Coke Zero",  caffeine: 35,  sugar: 0,  emoji: "🥤", variant: "secondary" },
+];
+
 export default function Index() {
   const { env } = useLoaderData<typeof loader>();
   const navigation = useNavigation();
@@ -45,13 +55,9 @@ export default function Index() {
 
   // Modal State
   const [showAddModal, setShowAddModal] = React.useState(false);
-  const [selectedCoffee, setSelectedCoffee] = React.useState<{amount: number, type: string} | null>(null);
+  const [selectedDrink, setSelectedDrink] = React.useState<{caffeine: number, sugar: number, type: string} | null>(null);
   const [logTime, setLogTime] = React.useState(toLocalISOString(new Date()));
   
-  // Delete Modal State
-  const [showDeleteModal, setShowDeleteModal] = React.useState(false);
-  const [logToDelete, setLogToDelete] = React.useState<string | null>(null);
-
   // Initialize Supabase Client
   const [sbClient] = React.useState(() => 
     createClient(env.SUPABASE_URL!, env.SUPABASE_KEY!)
@@ -110,20 +116,21 @@ export default function Index() {
   };
 
   // Open Add Modal
-  const initiateAddLog = (amount: number, type: string) => {
-    setSelectedCoffee({ amount, type });
+  const initiateAddLog = (drink: typeof DRINK_PRESETS[0]) => {
+    setSelectedDrink({ caffeine: drink.caffeine, sugar: drink.sugar, type: drink.label });
     setLogTime(toLocalISOString(new Date()));
     setShowAddModal(true);
   };
 
   // Confirm Add
   const confirmAddLog = async () => {
-    if (!session || !selectedCoffee) return;
+    if (!session || !selectedDrink) return;
     const dateObj = new Date(logTime);
     const { error } = await sbClient.from("coffee_logs").insert({
       user_id: session.user.id,
-      caffeine_amount: selectedCoffee.amount,
-      coffee_type: selectedCoffee.type,
+      caffeine_amount: selectedDrink.caffeine,
+      sugar_amount: selectedDrink.sugar,
+      coffee_type: selectedDrink.type,
       drank_at: dateObj.toISOString(),
     });
 
@@ -135,27 +142,29 @@ export default function Index() {
     }
   };
 
-  // Delete Handlers
-  const promptDelete = (logId: string) => {
-    setLogToDelete(logId);
-    setShowDeleteModal(true);
-  };
-
-  const confirmDelete = async () => {
-    if (!logToDelete) return;
-    const { error } = await sbClient.from("coffee_logs").delete().eq("id", logToDelete);
+  // Delete Handler
+  const handleDeleteLog = async (logId: string) => {
+    const { error } = await sbClient.from("coffee_logs").delete().eq("id", logId);
 
     if (error) {
       alert("Failed to delete: " + error.message);
     } else {
-      setLogs(prev => prev.filter(l => l.id !== logToDelete));
-      setShowDeleteModal(false);
+      setLogs(prev => prev.filter(l => l.id !== logId));
     }
   };
 
-  const totalCaffeine = logs.reduce((sum, log) => sum + log.caffeine_amount, 0);
-  const maxSafe = 400;
-  const progressVariant = totalCaffeine > maxSafe ? "danger" : totalCaffeine > 200 ? "warning" : "success";
+  // --- Analysis Calculations ---
+  const totalCaffeine = logs.reduce((sum, log) => sum + (log.caffeine_amount || 0), 0);
+  const totalSugar = logs.reduce((sum, log) => sum + (log.sugar_amount || 0), 0);
+  
+  // Caffeine Thresholds
+  const maxSafeCaffeine = 400;
+  const caffeineVariant = totalCaffeine > maxSafeCaffeine ? "danger" : totalCaffeine > 200 ? "warning" : "success";
+
+  // Sugar Thresholds (WHO: <25g ideal, <50g limit)
+  const maxSafeSugar = 50;
+  const sugarVariant = totalSugar > maxSafeSugar ? "danger" : totalSugar > 25 ? "warning" : "success";
+
 
   if (loading) return <Container className="p-5 text-center">Loading...</Container>;
 
@@ -195,63 +204,85 @@ export default function Index() {
         <Button variant="outline-secondary" size="sm" onClick={handleLogout}>Sign Out</Button>
       </div>
 
-      <Card className="mb-4 text-center shadow-sm border-0 bg-light">
-        <Card.Body>
-          <h6 className="text-muted text-uppercase mb-2">Total Caffeine</h6>
-          <h2 className="display-4 fw-bold text-dark">{totalCaffeine} <span className="fs-4 text-muted">mg</span></h2>
-          <ProgressBar now={(totalCaffeine / maxSafe) * 100} variant={progressVariant} className="mt-3 mb-4" style={{ height: "10px" }} />
-          <div className="mt-4 mb-2">
-            <h6 className="text-muted text-uppercase small mb-3">Metabolism Forecast</h6>
-            <CaffeineChart logs={logs} />
-          </div>
-        </Card.Body>
-      </Card>
+      {/* Stats Cards */}
+      <Row className="g-3 mb-4">
+        {/* Caffeine Card */}
+        <Col xs={12} md={6}>
+          <Card className="h-100 shadow-sm border-0 bg-light">
+            <Card.Body>
+              <h6 className="text-muted text-uppercase mb-2">Caffeine</h6>
+              <div className="d-flex align-items-baseline gap-1">
+                <h2 className="display-6 fw-bold text-dark mb-0">{totalCaffeine}</h2>
+                <span className="text-muted">mg</span>
+              </div>
+              <ProgressBar now={(totalCaffeine / maxSafeCaffeine) * 100} variant={caffeineVariant} className="mt-2" style={{ height: "6px" }} />
+              <div className="small text-muted mt-1">Max: 400mg</div>
+            </Card.Body>
+          </Card>
+        </Col>
 
-      <Row className="g-2 mb-4">
-        <Col>
-          <Button variant="outline-primary" className="w-100 py-3" onClick={() => initiateAddLog(100, "Weak/Tea")}>
-            <div className="fw-bold">Small</div><div className="small opacity-75">100mg</div>
-          </Button>
-        </Col>
-        <Col>
-          <Button variant="primary" className="w-100 py-3" onClick={() => initiateAddLog(150, "Latte")}>
-            <div className="fw-bold">Latte</div><div className="small opacity-75">150mg</div>
-          </Button>
-        </Col>
-        <Col>
-          <Button variant="dark" className="w-100 py-3" onClick={() => initiateAddLog(200, "Americano")}>
-            <div className="fw-bold">Strong</div><div className="small opacity-75">200mg</div>
-          </Button>
+        {/* Sugar Card */}
+        <Col xs={12} md={6}>
+          <Card className="h-100 shadow-sm border-0 bg-light">
+            <Card.Body>
+              <h6 className="text-muted text-uppercase mb-2">Sugar</h6>
+              <div className="d-flex align-items-baseline gap-1">
+                <h2 className="display-6 fw-bold text-dark mb-0">{totalSugar}</h2>
+                <span className="text-muted">g</span>
+              </div>
+              <ProgressBar now={(totalSugar / maxSafeSugar) * 100} variant={sugarVariant} className="mt-2" style={{ height: "6px" }} />
+              <div className="small text-muted mt-1">Goal: &lt;25g</div>
+            </Card.Body>
+          </Card>
         </Col>
       </Row>
 
+      {/* Chart Section */}
+      <Card className="mb-4 shadow-sm border-0">
+        <Card.Body>
+           <h6 className="text-muted text-uppercase small mb-3">Caffeine Metabolism Forecast</h6>
+           <CaffeineChart logs={logs} />
+        </Card.Body>
+      </Card>
+
+      {/* Quick Add Buttons */}
+      <h5 className="mb-3">Quick Add</h5>
+      <Row className="g-2 mb-4">
+        {DRINK_PRESETS.map((drink) => (
+          <Col xs={6} sm={4} key={drink.id}>
+            <Button 
+              variant={drink.variant} 
+              className="w-100 py-3 position-relative overflow-hidden" 
+              onClick={() => initiateAddLog(drink)}
+              style={{ minHeight: "100px" }}
+            >
+              <div className="fs-2 mb-1">{drink.emoji}</div>
+              <div className="fw-bold text-nowrap">{drink.label}</div>
+              <div className="small opacity-75 mt-1">
+                <span className="d-inline-block me-1">⚡ {drink.caffeine}</span>
+                <span className="d-inline-block">🍬 {drink.sugar}</span>
+              </div>
+            </Button>
+          </Col>
+        ))}
+      </Row>
+
+      {/* Recent Logs List - Extracted Component */}
       <h5 className="mb-3">Recent Logs</h5>
       <Card className="shadow-sm border-0">
-        <ListGroup variant="flush">
-          {logs.length === 0 ? (
-            <ListGroup.Item className="text-center text-muted py-4">No coffee yet today. Need a boost? 🚀</ListGroup.Item>
-          ) : (
-            logs.map((log) => (
-              <ListGroup.Item key={log.id} className="d-flex justify-content-between align-items-center">
-                <div>
-                  <span className="fw-bold">{log.coffee_type || "Coffee"}</span>
-                  <div className="small text-muted">{new Date(log.drank_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
-                </div>
-                <div className="d-flex align-items-center gap-3">
-                  <Badge bg="secondary" pill>{log.caffeine_amount} mg</Badge>
-                  <Button variant="link" className="text-danger p-0 text-decoration-none" style={{ fontSize: "1.2rem", lineHeight: 1 }} onClick={() => promptDelete(log.id)} aria-label="Delete log">&times;</Button>
-                </div>
-              </ListGroup.Item>
-            ))
-          )}
-        </ListGroup>
+        <LogList logs={logs} onDelete={handleDeleteLog} />
       </Card>
 
       {/* Add Modal */}
       <Modal show={showAddModal} onHide={() => setShowAddModal(false)} centered>
-        <Modal.Header closeButton><Modal.Title>Log Coffee</Modal.Title></Modal.Header>
+        <Modal.Header closeButton><Modal.Title>Log Drink</Modal.Title></Modal.Header>
         <Modal.Body>
-          <p className="lead">Adding: <strong>{selectedCoffee?.type}</strong> ({selectedCoffee?.amount}mg)</p>
+          <div className="text-center mb-4">
+            <h4 className="mb-1">{selectedDrink?.type}</h4>
+            <div className="text-muted">
+               ⚡ {selectedDrink?.caffeine} mg &nbsp;|&nbsp; 🍬 {selectedDrink?.sugar} g
+            </div>
+          </div>
           <BootstrapForm.Group controlId="logTime">
             <BootstrapForm.Label>When did you drink it?</BootstrapForm.Label>
             <BootstrapForm.Control type="datetime-local" value={logTime} onChange={(e) => setLogTime(e.target.value)} />
@@ -260,16 +291,6 @@ export default function Index() {
         <Modal.Footer>
           <Button variant="secondary" onClick={() => setShowAddModal(false)}>Cancel</Button>
           <Button variant="primary" onClick={confirmAddLog}>Confirm & Add</Button>
-        </Modal.Footer>
-      </Modal>
-
-      {/* Delete Modal */}
-      <Modal show={showDeleteModal} onHide={() => setShowDeleteModal(false)} centered size="sm">
-        <Modal.Header closeButton><Modal.Title>Delete Log?</Modal.Title></Modal.Header>
-        <Modal.Body>Are you sure you want to remove this record?</Modal.Body>
-        <Modal.Footer>
-          <Button variant="secondary" onClick={() => setShowDeleteModal(false)}>Cancel</Button>
-          <Button variant="danger" onClick={confirmDelete}>Delete</Button>
         </Modal.Footer>
       </Modal>
 

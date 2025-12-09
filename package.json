@@ -18,6 +18,7 @@
     "@remix-run/serve": "*",
     "@supabase/supabase-js": "^2.86.2",
     "bootstrap": "^5.3.8",
+    "bootstrap-icons": "^1.13.1",
     "isbot": "^4.1.0",
     "react-bootstrap": "^2.10.10",
     "recharts": "^3.5.1"
