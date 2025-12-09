@@ -20,32 +20,42 @@ interface CaffeineChartProps {
   logs: Log[];
 }
 
-// Caffeine Half-Life in hours (average)
+// Average caffeine half-life in hours (approx. 5 hours)
 const HALF_LIFE = 5;
 
+// Calculates remaining caffeine using the exponential decay formula
 const calculateRemaining = (amount: number, elapsedHours: number) => {
   if (elapsedHours < 0) return 0;
   return amount * Math.pow(0.5, elapsedHours / HALF_LIFE);
 };
 
+/**
+ * CaffeineChart Component
+ * 
+ * Visualizes the estimated caffeine levels in the user's body over time using an AreaChart.
+ * 
+ * Functionality:
+ * - Processes an array of coffee logs to calculate cumulative caffeine levels.
+ * - Generates a time-series dataset from the current day's 00:00 to the next day's 06:00.
+ * - Applies a half-life decay algorithm to simulate metabolism.
+ * - Renders a visualization with a "Sleep OK" (<50mg) reference threshold.
+ */
 export function CaffeineChart({ logs }: CaffeineChartProps) {
   const [data, setData] = React.useState<any[]>([]);
 
   React.useEffect(() => {
     if (!logs) return;
 
-    // 1. Define time range: Today 00:00 to Tomorrow 06:00
     const start = new Date();
     start.setHours(0, 0, 0, 0);
     
     const end = new Date(start);
     end.setDate(end.getDate() + 1);
-    end.setHours(6, 0, 0, 0); // Show until 6 AM next day
+    end.setHours(6, 0, 0, 0);
 
     const points = [];
     let current = new Date(start);
 
-    // 2. Generate points every 30 minutes
     while (current <= end) {
       const currentTime = current.getTime();
       let totalCaffeine = 0;
@@ -54,7 +64,6 @@ export function CaffeineChart({ logs }: CaffeineChartProps) {
         const logTime = new Date(log.drank_at).getTime();
         const elapsedHours = (currentTime - logTime) / (1000 * 60 * 60);
         
-        // Only count coffee drank before this time point
         if (elapsedHours >= 0) {
           totalCaffeine += calculateRemaining(log.caffeine_amount, elapsedHours);
         }
@@ -66,7 +75,6 @@ export function CaffeineChart({ logs }: CaffeineChartProps) {
         amount: Math.round(totalCaffeine),
       });
 
-      // Increment by 30 mins
       current.setMinutes(current.getMinutes() + 30);
     }
 
@@ -101,13 +109,19 @@ export function CaffeineChart({ logs }: CaffeineChartProps) {
           </defs>
           <CartesianGrid strokeDasharray="3 3" vertical={false} />
           <XAxis 
-            dataKey="time" 
+            dataKey="timestamp" 
+            type="number"
+            domain={['dataMin', 'dataMax']}
+            tickFormatter={(unixTime) => new Date(unixTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             minTickGap={50} 
             tick={{fontSize: 12}}
           />
           <YAxis />
-          <Tooltip />
+          <Tooltip 
+            labelFormatter={(label) => new Date(label).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+          />
           <ReferenceLine y={50} label="Sleep OK (<50mg)" stroke="green" strokeDasharray="3 3" />
+          <ReferenceLine x={Date.now()} label="Now" stroke="red" />
           <Area
             type="monotone"
             dataKey="amount"
