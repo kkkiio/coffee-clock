@@ -1,0 +1,42 @@
+export const DRINK_PRESETS = [
+    {
+        id: "espresso",
+        label: "Espresso",
+        caffeine: 80,
+        sugar: 0,
+        emoji: "☕",
+        variant: "outline-dark",
+    },
+    {
+        id: "americano",
+        label: "Americano",
+        caffeine: 150,
+        sugar: 0,
+        emoji: "☕",
+        variant: "dark",
+    },
+    {
+        id: "latte",
+        label: "Latte",
+        caffeine: 120,
+        sugar: 10,
+        emoji: "🥛",
+        variant: "primary",
+    },
+    {
+        id: "lemon_tea",
+        label: "Lemon Tea",
+        caffeine: 15,
+        sugar: 20,
+        emoji: "🍋",
+        variant: "warning",
+    },
+    {
+        id: "coke_zero",
+        label: "Coke Zero",
+        caffeine: 35,
+        sugar: 0,
+        emoji: "🥤",
+        variant: "secondary",
+    },
+];
