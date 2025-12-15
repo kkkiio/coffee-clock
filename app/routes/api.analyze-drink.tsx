@@ -37,6 +37,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         },
         body: JSON.stringify({
           model: "glm-4.6v",
+          max_tokens: 8192,
           temperature: 0.5, // Lower temperature for more stable JSON
           tools: [
             {
@@ -100,16 +101,41 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const resultJson = await analyzeResponse.json();
     console.log("GLM FULL RESPONSE:", JSON.stringify(resultJson, null, 2));
 
+    const finishReason = resultJson.choices?.[0]?.finish_reason;
     const content = resultJson.choices?.[0]?.message?.content;
+
+    // Check if response was truncated
+    if (finishReason === "length") {
+      console.error("Response was truncated due to token limit");
+      return json(
+        { error: "AI response was truncated, please try again" },
+        { status: 500 }
+      );
+    }
+
+    // Check if content is empty
+    if (!content) {
+      const reasoningContent =
+        resultJson.choices?.[0]?.message?.reasoning_content;
+      console.error(
+        "Content was empty!",
+        reasoningContent ? "Reasoning content exists but no final answer" : ""
+      );
+      return json(
+        { error: "AI failed to generate a valid response" },
+        { status: 500 }
+      );
+    }
+
     let parsedData: any = {};
-    if (content) {
-      try {
-        parsedData = parseContent(content);
-      } catch (e) {
-        console.warn("Failed to parse JSON content", content);
-      }
-    } else {
-      console.warn("Content was empty!");
+    try {
+      parsedData = parseContent(content);
+    } catch (e) {
+      console.warn("Failed to parse JSON content", content);
+      return json(
+        { error: "Failed to parse AI response as JSON" },
+        { status: 500 }
+      );
     }
 
     return json({

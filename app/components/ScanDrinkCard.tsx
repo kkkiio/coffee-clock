@@ -23,17 +23,17 @@ export function ScanDrinkCard({ onLogDrink, onError }: ScanDrinkCardProps) {
   const isAnalyzing = analyzeFetcher.state !== "idle";
 
   React.useEffect(() => {
-    if (
-      analyzeFetcher.data &&
-      (analyzeFetcher.data as any).caffeine !== undefined
-    ) {
+    if (analyzeFetcher.data) {
       const res = analyzeFetcher.data as any;
-      // Sanity checks
-      if (res.caffeine !== null) {
+      // Check for error response first
+      if (res.error) {
+        onError("Analysis failed: " + res.error);
+        return;
+      }
+      // Handle success response
+      if (res.caffeine !== undefined && res.caffeine !== null) {
         setAnalysisResult(res);
         setSelectedCategory(res.productName || "");
-      } else if (res.error) {
-        onError("Analysis failed: " + res.error);
       }
     }
   }, [analyzeFetcher.data, onError]);
