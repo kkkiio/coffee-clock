@@ -32,3 +32,31 @@ export default function App() {
     </html>
   );
 }
+
+export function ErrorBoundary() {
+  return (
+    <html lang="en">
+      <head>
+        <title>Oh no!</title>
+        <Meta />
+        <Links />
+      </head>
+      <body>
+        <div className="container py-5">
+          <div className="alert alert-danger">
+            <h4 className="alert-heading">Application Error</h4>
+            <p>
+              Something went wrong. Please check the console logs for more
+              details.
+            </p>
+            <hr />
+            <a href="/" className="btn btn-primary">
+              Return to Home
+            </a>
+          </div>
+        </div>
+        <Scripts />
+      </body>
+    </html>
+  );
+}

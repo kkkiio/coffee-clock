@@ -127,22 +127,29 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       );
     }
 
-    let parsedData: any = {};
-    try {
-      parsedData = parseContent(content);
-    } catch (e) {
-      console.warn("Failed to parse JSON content", content);
-      return json(
-        { error: "Failed to parse AI response as JSON" },
-        { status: 500 }
-      );
-    }
+    const parsedData = await (async () => {
+      try {
+        return parseContent(content);
+      } catch (e) {
+        console.warn(
+          "Failed to parse JSON content directly, trying to strip markdown...",
+          content
+        );
+        // Fallback: try to find JSON block
+        const match = content.match(/```json([\s\S]*?)```/);
+        if (match && match[1]) {
+          return parseContent(match[1]);
+        }
+        throw e;
+      }
+    })();
 
     return json({
       brand: parsedData.brand || "Unknown",
       productName: parsedData.product_name || "Unknown Drink",
       caffeine: parsedData.caffeine_mg || 0,
       sugar: parsedData.sugar_g || 0,
+      volume: parsedData.volume_ml || 0,
       note: parsedData.note || "Analysis completed",
       raw: parsedData,
       debug: resultJson,
@@ -156,11 +163,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 /**
  * Robust cleaning of the content
  * 1. Unwrap content from Zhipu's special `<|begin_of_box|>` `<|end_of_box|>` tags
+ * 2. Remove markdown code blocks if present (handled in caller too but good for safety)
  */
 function parseContent(content: string) {
   let cleanContent = content
     .replace(/<\|begin_of_box\|>/g, "")
     .replace(/<\|end_of_box\|>/g, "");
+
+  // Remove markdown blocks if they were passed into here directly
+  cleanContent = cleanContent.replace(/^```json\s*/, "").replace(/\s*```$/, "");
+
   cleanContent = cleanContent.trim();
   return JSON.parse(cleanContent);
 }
