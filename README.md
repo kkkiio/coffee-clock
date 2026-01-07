@@ -10,14 +10,6 @@ An intelligent caffeine tracking app that visualizes your caffeine metabolism an
 - **Secure Data**: Personal account system powered by Supabase.
 - **Cloud Sync**: Access your data from any device.
 
-## 🛠 Tech Stack
-
-- **Framework**: [Remix](https://remix.run/) (React Full-stack)
-- **Deployment**: [Netlify](https://www.netlify.com/) (Serverless Functions)
-- **Database & Auth**: [Supabase](https://supabase.com/)
-- **Styling**: [Bootstrap 5](https://getbootstrap.com/)
-- **Charts**: [Recharts](https://recharts.org/)
-
 ## 🚀 Getting Started
 
 ### Prerequisites
@@ -29,12 +21,14 @@ An intelligent caffeine tracking app that visualizes your caffeine metabolism an
 
 1. Clone the repository
 2. Install dependencies:
+
    ```bash
    npm install
    ```
 
 3. Configure Environment Variables:
    Create a `.env` file in the root directory:
+
    ```env
    VITE_SUPABASE_URL=your_supabase_project_url
    VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY=your_supabase_anon_key
