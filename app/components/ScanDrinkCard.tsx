@@ -131,16 +131,43 @@ export function ScanDrinkCard({ onLogDrink, onError }: ScanDrinkCardProps) {
             throw new Error("Failed to initialize analysis task. Please ensure you are logged in.");
         }
 
-        // 3. Convert Image to Base64
-        const base64 = await new Promise<string>((resolve) => {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                const res = reader.result as string;
-                // Remove data URL prefix (data:image/jpeg;base64,)
-                const b64 = res.split(",")[1];
-                resolve(b64);
-            };
-            reader.readAsDataURL(file);
+        // 3. Resize and Compress Image to prevent 500 (Payload Too Large)
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement("canvas");
+            let width = img.width;
+            let height = img.height;
+            const maxDim = 2048; // Balanced for AI OCR accuracy and payload size
+
+            if (width > maxDim || height > maxDim) {
+              if (width > height) {
+                height = Math.round((height * maxDim) / width);
+                width = maxDim;
+              } else {
+                width = Math.round((width * maxDim) / height);
+                height = maxDim;
+              }
+            }
+
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext("2d");
+            if (!ctx) {
+                reject(new Error("Failed to get canvas context"));
+                return;
+            }
+            ctx.drawImage(img, 0, 0, width, height);
+            
+            // Compress to JPEG at 0.8 quality
+            const dataUrl = canvas.toDataURL("image/jpeg", 0.8);
+            const b64 = dataUrl.split(",")[1];
+            resolve(b64);
+          };
+          img.onerror = (e) => reject(e);
+          
+          // Create object URL from file
+          img.src = URL.createObjectURL(file);
         });
 
         // 4. Trigger Background Function
@@ -150,7 +177,7 @@ export function ScanDrinkCard({ onLogDrink, onError }: ScanDrinkCardProps) {
             body: JSON.stringify({
                 jobId,
                 imageBase64: base64,
-                mimeType: file.type
+                mimeType: "image/jpeg" // Always jpeg after conversion
             }),
             headers: {
                 "Content-Type": "application/json"
