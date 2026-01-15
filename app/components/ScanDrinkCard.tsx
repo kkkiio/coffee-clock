@@ -190,21 +190,20 @@ export function ScanDrinkCard({ onLogDrink, onError }: ScanDrinkCardProps) {
               ) : (
                 <>
                   <BootstrapForm.Label
-                    htmlFor="cameraInput"
+                    htmlFor="imageInput"
                     className="btn btn-outline-primary btn-lg w-100 mb-0"
                   >
-                    📸 Snap a Photo
+                    📸 Scan Drink Image
                   </BootstrapForm.Label>
                   <input
-                    id="cameraInput"
+                    id="imageInput"
                     type="file"
                     accept="image/*"
-                    capture="environment"
                     className="d-none"
                     onChange={handleImageUpload}
                   />
                   <div className="text-muted small mt-2">
-                    Instantly recognize caffeine & sugar
+                    Snap a photo or upload a screenshot
                   </div>
                 </>
               )}
