@@ -1,51 +1,118 @@
 import { type Handler, type HandlerEvent, type HandlerContext } from "@netlify/functions";
-import { createClient } from "@supabase/supabase-js";
+import { getStore, connectLambda } from "@netlify/blobs";
 
-// Initialize Supabase Admin Client (Service Role) outside handler for reuse
-const supabaseUrl = process.env.VITE_SUPABASE_URL;
-const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const bigModelApiKey = process.env.BIGMODEL_API_KEY;
+const MAX_ERROR_TEXT_LEN = 500;
 
-if (!supabaseUrl || !supabaseServiceKey) {
-  console.error("Missing Supabase Service Key or URL");
-}
+const trimErrorText = (text: string, maxLen: number = MAX_ERROR_TEXT_LEN) =>
+  text.length > maxLen ? `${text.slice(0, maxLen)}...` : text;
 
-const supabaseAdmin = (supabaseUrl && supabaseServiceKey) 
-  ? createClient(supabaseUrl, supabaseServiceKey) 
-  : null;
+const jsonResponse = (statusCode: number, payload: Record<string, unknown>) => ({
+  statusCode,
+  headers: { "Content-Type": "application/json; charset=utf-8" },
+  body: JSON.stringify(payload),
+});
 
+/**
+ * Netlify Function: analyze-drink-background
+ * 功能: 接收图片(base64)并调用 GLM 分析饮料信息，写入 Supabase 任务结果。
+ * 参数: 
+ *   方式1 (Legacy): jobId(string), imageBase64(string), mimeType(string, 可选)
+ *   方式2 (Blob): blobKey(string), jobId(string, 可选 - 优先读 blob 内的 parameters)
+ * 返回: 202 表示任务已启动；失败时返回 4xx/5xx 且包含错误原因。
+ */
 const handler: Handler = async (event: HandlerEvent, context: HandlerContext) => {
+  // Initialize Blobs for Lambda Compatibility Mode
+  connectLambda(event as any);
+
+  console.log("Function handler started.");
+
   // Only allow POST
   if (event.httpMethod !== "POST") {
-    return { statusCode: 405, body: "Method Not Allowed" };
+    return jsonResponse(405, { error: "Method Not Allowed" });
   }
 
-  if (!supabaseAdmin) {
-    console.error("Supabase Admin client not initialized");
-    return { statusCode: 500, body: "Server Configuration Error" };
+  // Dynamic import to prevent cold-start crashes if dependencies fail
+  let createClient;
+  try {
+    const supabaseModule = await import("@supabase/supabase-js");
+    createClient = supabaseModule.createClient;
+  } catch (err: any) {
+    console.error("Dependency Load Error:", err);
+    return jsonResponse(500, {
+      error: `Dependency Error: Failed to load supabase-js. ${err.message}`,
+    });
   }
 
-  if (!bigModelApiKey) {
-    console.error("BIGMODEL_API_KEY is missing");
-    return { statusCode: 500, body: "Server Configuration Error" };
+  // Env Check
+  const supabaseUrl = process.env.VITE_SUPABASE_URL;
+  const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const bigModelApiKey = process.env.BIGMODEL_API_KEY;
+
+  if (!supabaseUrl || !supabaseServiceKey || !bigModelApiKey) {
+    return jsonResponse(500, { error: "Config Error: Missing env vars" });
   }
+
+  // Init Supabase
+  let supabaseAdmin;
+  try {
+    supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+  } catch (err: any) {
+    return jsonResponse(500, { error: `Supabase Init Error: ${err.message}` });
+  }
+
+  // Parse Body
+  let initialPayload;
+  try {
+    initialPayload = JSON.parse(event.body || "{}");
+  } catch (e) {
+    return jsonResponse(400, { error: "Invalid JSON body" });
+  }
+
+  let finalPayload = { ...initialPayload };
+  let blobStore = null;
+  let currentBlobKey = null;
+
+  // Handle Blob Storage Input
+  if (initialPayload.blobKey) {
+    console.log(`[Blob] Fetching data for key: ${initialPayload.blobKey}`);
+    try {
+      currentBlobKey = initialPayload.blobKey;
+      blobStore = getStore("temp-images");
+      const blobData = await blobStore.get(currentBlobKey, { type: "text" });
+
+      if (!blobData) {
+        throw new Error("Blob not found or expired");
+      }
+
+      // Merge blob data into payload (blob data is expected to be the full original JSON)
+      const blobJson = JSON.parse(blobData);
+      finalPayload = { ...finalPayload, ...blobJson };
+
+    } catch (err: any) {
+      console.error(`[Blob] Error reading blob: ${err.message}`);
+      // Fallback or error? If we depend on blob for image, we must error.
+      // We will continue to validation checks to handle it gracefully.
+    }
+  }
+
+  const { jobId, imageBase64, mimeType } = finalPayload;
+  if (!jobId || !imageBase64) {
+    return jsonResponse(400, { error: "Missing jobId or imageBase64 (or failed to retrieve from blob)" });
+  }
+
+  console.log(`[Job: ${jobId}] Starting logic...`);
+
+  const safeUpdateJob = async (data: Record<string, unknown>) => {
+    try {
+      await supabaseAdmin.from("analysis_jobs").update(data).eq("id", jobId);
+    } catch (err) {
+      console.error("DB Update Error:", err);
+    }
+  };
 
   try {
-    const payload = JSON.parse(event.body || "{}");
-    const { jobId, imageBase64, mimeType } = payload;
-
-    if (!jobId || !imageBase64) {
-      console.error("Missing jobId or image data");
-      return { statusCode: 400, body: "Missing required fields" };
-    }
-
-    console.log(`[Job: ${jobId}] Starting background analysis...`);
-
-    // 1. Update status to 'processing'
-    await supabaseAdmin
-      .from("analysis_jobs")
-      .update({ status: "processing", updated_at: new Date().toISOString() })
-      .eq("id", jobId);
+    // 1. Update status
+    await safeUpdateJob({ status: "processing", updated_at: new Date().toISOString() });
 
     // 2. Call GLM API
     const analyzeResponse = await fetch(
@@ -114,7 +181,7 @@ const handler: Handler = async (event: HandlerEvent, context: HandlerContext) =>
     );
 
     let resultJson;
-    
+
     if (!analyzeResponse.ok) {
       const errText = await analyzeResponse.text();
       console.error(`[Job: ${jobId}] GLM API Error:`, errText);
@@ -125,8 +192,8 @@ const handler: Handler = async (event: HandlerEvent, context: HandlerContext) =>
 
     const content = resultJson.choices?.[0]?.message?.content;
     if (!content) {
-       console.error(`[Job: ${jobId}] Empty content from AI`);
-       throw new Error("AI response was empty");
+      console.error(`[Job: ${jobId}] Empty content from AI`);
+      throw new Error("AI response was empty");
     }
 
     // Parse logic (borrowed from original code)
@@ -150,52 +217,44 @@ const handler: Handler = async (event: HandlerEvent, context: HandlerContext) =>
     }
 
     // 3. Update status to 'completed' with result
-    const { error: updateError } = await supabaseAdmin
-      .from("analysis_jobs")
-      .update({
-        status: "completed",
-        result: parsedData,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", jobId);
+    await safeUpdateJob({
+      status: "completed",
+      result: parsedData,
+      updated_at: new Date().toISOString(),
+    });
 
-    if (updateError) {
-      console.error(`[Job: ${jobId}] Failed to update Supabase:`, updateError);
-    } else {
-      console.log(`[Job: ${jobId}] Successfully completed.`);
-    }
+  } catch (error: any) {
+    console.error("Logic Error:", error);
+    const msg = error.message || String(error);
 
-  } catch (error: unknown) {
-    console.error(`[Job: ${context?.clientContext?.jobId || "unknown"}] Fatal error:`, error);
-    
-    const errorMessage = error instanceof Error ? error.message : String(error);
+    // Update DB if possible
+    await safeUpdateJob({
+      status: "failed",
+      error_message: trimErrorText(msg),
+      updated_at: new Date().toISOString(),
+    });
 
-    // Attempt to report failure
-    try {
-        if(supabaseAdmin) {
-            const payload = JSON.parse(event.body || "{}");
-            if(payload.jobId) {
-                await supabaseAdmin
-                .from("analysis_jobs")
-                .update({
-                    status: "failed", 
-                    error_message: errorMessage,
-                    updated_at: new Date().toISOString()
-                })
-                .eq("id", payload.jobId);
-            }
-        }
-    } catch(e) {
-        console.error("Failed to report error status", e);
+    return jsonResponse(500, {
+      error: msg,
+      jobId,
+      meta: {
+        mimeType,
+        imageBase64Len: imageBase64 ? imageBase64.length : 0,
+      },
+    });
+  } finally {
+    // Clean up Blob
+    if (blobStore && currentBlobKey) {
+      try {
+        await blobStore.delete(currentBlobKey);
+        console.log(`[Blob] Deleted key: ${currentBlobKey}`);
+      } catch (cleanupErr) {
+        console.warn(`[Blob] Failed to cleanup key: ${currentBlobKey}`, cleanupErr);
+      }
     }
   }
 
-  // Background functions return 202 immediately to the client
-  // The logic above runs asynchronously
-  return {
-    statusCode: 202,
-    body: JSON.stringify({ message: "Analysis started in background" }),
-  };
+  return jsonResponse(202, { message: "Started" });
 };
 
 export { handler };

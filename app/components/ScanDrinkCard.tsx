@@ -11,9 +11,8 @@ interface ScanDrinkCardProps {
 // Initialize Supabase client for client-side operations
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_DEFAULT_KEY;
-const supabase = (supabaseUrl && supabaseKey) 
-  ? createClient(supabaseUrl, supabaseKey) 
-  : null;
+const supabase =
+  supabaseUrl && supabaseKey ? createClient(supabaseUrl, supabaseKey) : null;
 
 /**
  * ScanDrinkCard Component
@@ -40,7 +39,7 @@ export function ScanDrinkCard({ onLogDrink, onError }: ScanDrinkCardProps) {
     const maxAttempts = 60; // Approx 2 minutes (2s interval)
 
     setPollStatus("Initializing analysis...");
-    
+
     pollTimerRef.current = setInterval(async () => {
       attempts++;
       if (attempts > maxAttempts) {
@@ -79,7 +78,11 @@ export function ScanDrinkCard({ onLogDrink, onError }: ScanDrinkCardProps) {
         onError(data.error_message || "Analysis failed.");
       } else {
         // Update status text for user feedback
-        setPollStatus(data.status === "processing" ? "AI is analyzing image..." : "Waiting for queue...");
+        setPollStatus(
+          data.status === "processing"
+            ? "AI is analyzing image..."
+            : "Waiting for queue..."
+        );
       }
     }, 2000);
   };
@@ -96,13 +99,13 @@ export function ScanDrinkCard({ onLogDrink, onError }: ScanDrinkCardProps) {
     if (!file) return;
 
     if (!supabase) {
-        onError("System configuration error: Supabase client missing");
-        return;
+      onError("System configuration error: Supabase client missing");
+      return;
     }
 
     // Basic validation
-    if (file.size > 5 * 1024 * 1024) {
-      onError("Image is too large (max 5MB)");
+    if (file.size > 4 * 1024 * 1024) {
+      onError("图片文件过大 (超过 4MB)，请尝试截图并缩小范围后再上传。");
       return;
     }
 
@@ -111,64 +114,98 @@ export function ScanDrinkCard({ onLogDrink, onError }: ScanDrinkCardProps) {
     setPollStatus("Uploading image...");
 
     try {
-        // 1. Generate Job ID
-        const jobId = crypto.randomUUID();
+      // 1. Generate Job ID
+      const jobId = crypto.randomUUID();
 
-        // 2. Insert Initial Record
-        // We use the current user's session implicitly handled by supabase-js if logged in.
-        // If not logged in, RLS might block this unless we allow anon inserts.
-        const { error: insertError } = await supabase
-            .from("analysis_jobs")
-            .insert({ 
-                id: jobId, 
-                status: 'pending' 
-                // user_id is automatically set to auth.uid() by default in DB if not provided,
-                // but strictly RLS requires an authenticated user.
-            });
-
-        if (insertError) {
-            console.error("DB Insert Error", insertError);
-            throw new Error("Failed to initialize analysis task. Please ensure you are logged in.");
-        }
-
-        // 3. Convert Image to Base64
-        const base64 = await new Promise<string>((resolve) => {
-            const reader = new FileReader();
-            reader.onloadend = () => {
-                const res = reader.result as string;
-                // Remove data URL prefix (data:image/jpeg;base64,)
-                const b64 = res.split(",")[1];
-                resolve(b64);
-            };
-            reader.readAsDataURL(file);
+      // 2. Insert Initial Record
+      // We use the current user's session implicitly handled by supabase-js if logged in.
+      // If not logged in, RLS might block this unless we allow anon inserts.
+      const { error: insertError } = await supabase
+        .from("analysis_jobs")
+        .insert({
+          id: jobId,
+          status: "pending",
+          // user_id is automatically set to auth.uid() by default in DB if not provided,
+          // but strictly RLS requires an authenticated user.
         });
 
-        // 4. Trigger Background Function
-        // Using relative path assuming the site is served from root or function proxy is set up
-        const response = await fetch("/.netlify/functions/analyze-drink-background", {
-            method: "POST",
-            body: JSON.stringify({
-                jobId,
-                imageBase64: base64,
-                mimeType: file.type
-            }),
-            headers: {
-                "Content-Type": "application/json"
-            }
-        });
+      if (insertError) {
+        console.error("DB Insert Error", insertError);
+        throw new Error(
+          "Failed to initialize analysis task. Please ensure you are logged in."
+        );
+      }
 
-        if (response.status !== 202 && response.status !== 200) {
-            throw new Error(`Failed to start analysis (Server returned ${response.status})`);
+      // 3. Convert Image to Base64
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const res = reader.result as string;
+          // Remove data URL prefix
+          const b64 = res.split(",")[1];
+          resolve(b64);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+
+      // 4. Trigger Background Function (via Blob Store for large payloads)
+      const debugInfo = `File: ${file.name}, Type: ${file.type}, Size: ${file.size}, B64Len: ${base64.length}`;
+      console.log(`[Debug] ${debugInfo}`);
+
+      // Step A: Upload Payload to Netlify Blob
+      const payload = {
+        jobId,
+        imageBase64: base64,
+        mimeType: file.type || "image/jpeg",
+      };
+
+      setPollStatus("Uploading to storage...");
+      const uploadResponse = await fetch(
+        "/.netlify/functions/upload-temp-image",
+        {
+          method: "POST",
+          body: JSON.stringify(payload),
+          headers: { "Content-Type": "application/json" },
         }
+      );
 
-        // 5. Start Polling
-        startPolling(jobId);
+      if (!uploadResponse.ok) {
+        const errText = await uploadResponse.text();
+        throw new Error(`Upload Failed ${uploadResponse.status}: ${errText}`);
+      }
 
+      const { key: blobKey } = await uploadResponse.json();
+      console.log(`[Debug] Blob stored with key: ${blobKey}`);
+
+      // Step B: Trigger Background Function with Blob Key
+      setPollStatus("Queueing analysis...");
+      const response = await fetch(
+        "/.netlify/functions/analyze-drink-background",
+        {
+          method: "POST",
+          body: JSON.stringify({ blobKey }),
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+
+      if (response.status !== 202 && response.status !== 200) {
+        const errText = await response.text();
+        throw new Error(
+          `${debugInfo} | Server Error ${response.status}: ${errText.slice(
+            0,
+            100
+          )}`
+        );
+      }
+
+      // 5. Start Polling
+      startPolling(jobId);
     } catch (err: any) {
-        console.error(err);
-        setIsAnalyzing(false);
-        onError(err.message || "Failed to start analysis");
-        stopPolling();
+      console.error(err);
+      setIsAnalyzing(false);
+      onError(err.message || "Failed to start analysis");
+      stopPolling();
     }
   };
 
@@ -292,4 +329,3 @@ export function ScanDrinkCard({ onLogDrink, onError }: ScanDrinkCardProps) {
     </>
   );
 }
-
